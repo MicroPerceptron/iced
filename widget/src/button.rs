@@ -16,12 +16,14 @@
 //!     button("Press me!").on_press(Message::ButtonPressed).into()
 //! }
 //! ```
-use crate::core::border::{self, Border};
+use crate::core::animation::{Animation, Easing};
+use crate::core::border::{self, Border, Radius};
 use crate::core::layout;
 use crate::core::mouse;
 use crate::core::overlay;
 use crate::core::renderer;
 use crate::core::theme::palette;
+use crate::core::time::{Duration, Instant};
 use crate::core::touch;
 use crate::core::widget::Operation;
 use crate::core::widget::tree::{self, Tree};
@@ -80,7 +82,6 @@ where
     padding: Padding,
     clip: bool,
     class: Theme::Class<'a>,
-    status: Option<Status>,
 }
 
 enum OnPress<'a, Message> {
@@ -114,7 +115,6 @@ where
             padding: DEFAULT_PADDING,
             clip: false,
             class: Theme::default(),
-            status: None,
         }
     }
 
@@ -192,9 +192,27 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone)]
 struct State {
     is_pressed: bool,
+    hovered: Animation<bool>,
+    pressed: Animation<bool>,
+    now: Instant,
+    initialized: bool,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        let now = Instant::now();
+
+        Self {
+            is_pressed: false,
+            hovered: control_animation(false),
+            pressed: control_animation(false),
+            now,
+            initialized: false,
+        }
+    }
 }
 
 impl<'a, Message, Theme, Renderer> Widget<Message, Theme, Renderer>
@@ -337,9 +355,29 @@ where
             Status::Active
         };
 
-        if let Event::Window(window::Event::RedrawRequested(_now)) = event {
-            self.status = Some(current_status);
-        } else if self.status.is_some_and(|status| status != current_status) {
+        let now = match event {
+            Event::Window(window::Event::RedrawRequested(now)) => *now,
+            _ => Instant::now(),
+        };
+        let state = tree.state.downcast_mut::<State>();
+        let hovered = matches!(current_status, Status::Hovered | Status::Pressed);
+        let pressed = matches!(current_status, Status::Pressed);
+
+        if state.initialized {
+            if state.hovered.value() != hovered {
+                state.hovered.go_mut(hovered, now);
+            }
+            if state.pressed.value() != pressed {
+                state.pressed.go_mut(pressed, now);
+            }
+        } else {
+            state.hovered = control_animation(hovered);
+            state.pressed = control_animation(pressed);
+            state.initialized = true;
+        }
+        state.now = now;
+
+        if state.hovered.is_animating(now) || state.pressed.is_animating(now) {
             shell.request_redraw();
         }
     }
@@ -356,39 +394,46 @@ where
     ) {
         let bounds = layout.bounds();
         let content_layout = layout.children().next().unwrap();
-        let style = theme.style(&self.class, self.status.unwrap_or(Status::Disabled));
-
-        if style.background.is_some() || style.border.width > 0.0 || style.shadow.color.a > 0.0 {
-            renderer.fill_quad(
-                renderer::Quad {
-                    bounds,
-                    border: style.border,
-                    shadow: style.shadow,
-                    snap: style.snap,
-                },
-                style
-                    .background
-                    .unwrap_or(Background::Color(Color::TRANSPARENT)),
-            );
-        }
-
-        let viewport = if self.clip {
-            bounds.intersection(viewport).unwrap_or(*viewport)
+        let state = tree.state.downcast_ref::<State>();
+        let style = if self.on_press.is_none() {
+            theme.style(&self.class, Status::Disabled)
         } else {
-            *viewport
+            let hover = state.hovered.interpolate(0.0, 1.0, state.now);
+            let press = state.pressed.interpolate(0.0, 1.0, state.now);
+            let active = theme.style(&self.class, Status::Active);
+            let hovered = theme.style(&self.class, Status::Hovered);
+            let pressed = theme.style(&self.class, Status::Pressed);
+
+            interpolate_style(interpolate_style(active, hovered, hover), pressed, press)
+        };
+        let press_offset = if self.on_press.is_some() {
+            state.pressed.interpolate(0.0, PRESS_TRANSLATE, state.now)
+        } else {
+            0.0
         };
 
-        self.content.as_widget().draw(
-            &tree.children[0],
-            renderer,
-            theme,
-            &renderer::Style {
-                text_color: style.text_color,
-            },
-            content_layout,
-            cursor,
-            &viewport,
-        );
+        renderer.with_translation(Vector::new(press_offset, press_offset), |renderer| {
+            draw(
+                renderer,
+                &style,
+                bounds,
+                viewport,
+                self.clip,
+                |renderer, viewport| {
+                    self.content.as_widget().draw(
+                        &tree.children[0],
+                        renderer,
+                        theme,
+                        &renderer::Style {
+                            text_color: style.text_color,
+                        },
+                        content_layout,
+                        cursor,
+                        viewport,
+                    );
+                },
+            );
+        });
     }
 
     fn mouse_interaction(
@@ -424,6 +469,130 @@ where
             translation,
         )
     }
+}
+
+fn draw<Renderer>(
+    renderer: &mut Renderer,
+    style: &Style,
+    bounds: Rectangle,
+    viewport: &Rectangle,
+    clip: bool,
+    draw_content: impl FnOnce(&mut Renderer, &Rectangle),
+) where
+    Renderer: crate::core::Renderer,
+{
+    if style.background.is_some() || style.border.width > 0.0 || style.shadow.color.a > 0.0 {
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                border: style.border,
+                shadow: style.shadow,
+                snap: style.snap,
+            },
+            style
+                .background
+                .unwrap_or(Background::Color(Color::TRANSPARENT)),
+        );
+    }
+
+    let viewport = if clip {
+        bounds.intersection(viewport).unwrap_or(*viewport)
+    } else {
+        *viewport
+    };
+
+    draw_content(renderer, &viewport);
+}
+
+const CONTROL_DURATION: Duration = Duration::from_millis(150);
+const PRESS_TRANSLATE: f32 = 1.0;
+
+fn control_animation(value: bool) -> Animation<bool> {
+    Animation::new(value)
+        .duration(CONTROL_DURATION)
+        .easing(Easing::Custom(control_ease_out))
+}
+
+// CSS cubic-bezier(0.2, 0, 0.2, 1), evaluated by inverting x(t).
+fn control_ease_out(x: f32) -> f32 {
+    let mut low = 0.0;
+    let mut high = 1.0;
+
+    for _ in 0..12 {
+        let t = (low + high) * 0.5;
+        let inverse = 1.0 - t;
+        let curve_x = 3.0 * inverse * inverse * t * 0.2 + 3.0 * inverse * t * t * 0.2 + t * t * t;
+
+        if curve_x < x {
+            low = t;
+        } else {
+            high = t;
+        }
+    }
+
+    let t = (low + high) * 0.5;
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn interpolate_style(from: Style, to: Style, amount: f32) -> Style {
+    let amount = amount.clamp(0.0, 1.0);
+
+    Style {
+        background: interpolate_background(from.background, to.background, amount),
+        text_color: from.text_color.mix(to.text_color, amount),
+        border: Border {
+            color: from.border.color.mix(to.border.color, amount),
+            width: lerp(from.border.width, to.border.width, amount),
+            radius: interpolate_radius(from.border.radius, to.border.radius, amount),
+        },
+        shadow: Shadow {
+            color: from.shadow.color.mix(to.shadow.color, amount),
+            offset: Vector::new(
+                lerp(from.shadow.offset.x, to.shadow.offset.x, amount),
+                lerp(from.shadow.offset.y, to.shadow.offset.y, amount),
+            ),
+            blur_radius: lerp(from.shadow.blur_radius, to.shadow.blur_radius, amount),
+        },
+        snap: if amount < 0.5 { from.snap } else { to.snap },
+    }
+}
+
+fn interpolate_background(
+    from: Option<Background>,
+    to: Option<Background>,
+    amount: f32,
+) -> Option<Background> {
+    match (from, to) {
+        (Some(Background::Color(from)), Some(Background::Color(to))) => {
+            Some(Background::Color(from.mix(to, amount)))
+        }
+        (None, Some(Background::Color(to))) => {
+            Some(Background::Color(Color { a: 0.0, ..to }.mix(to, amount)))
+        }
+        (Some(Background::Color(from)), None) => Some(Background::Color(
+            from.mix(Color { a: 0.0, ..from }, amount),
+        )),
+        (from, to) => {
+            if amount < 0.5 {
+                from
+            } else {
+                to
+            }
+        }
+    }
+}
+
+fn interpolate_radius(from: Radius, to: Radius, amount: f32) -> Radius {
+    Radius {
+        top_left: lerp(from.top_left, to.top_left, amount),
+        top_right: lerp(from.top_right, to.top_right, amount),
+        bottom_right: lerp(from.bottom_right, to.bottom_right, amount),
+        bottom_left: lerp(from.bottom_left, to.bottom_left, amount),
+    }
+}
+
+fn lerp(from: f32, to: f32, amount: f32) -> f32 {
+    from + (to - from) * amount
 }
 
 impl<'a, Message, Theme, Renderer> From<Button<'a, Message, Theme, Renderer>>
@@ -722,5 +891,66 @@ fn disabled(style: Style) -> Style {
             .map(|background| background.scale_alpha(0.5)),
         text_color: style.text_color.scale_alpha(0.5),
         ..style
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn control_easing_is_an_ease_out_curve() {
+        assert!(control_ease_out(0.0) < 0.001);
+        assert!(control_ease_out(0.5) > 0.5);
+        assert!((control_ease_out(1.0) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn controls_animate_for_the_design_system_duration() {
+        let started = Instant::now();
+        let mut animation = control_animation(false);
+        animation.go_mut(true, started);
+
+        let middle = animation.interpolate(0.0, 1.0, started + Duration::from_millis(75));
+        assert!(middle > 0.5 && middle < 1.0);
+        assert!(animation.is_animating(started + Duration::from_millis(149)));
+        assert!(!animation.is_animating(started + CONTROL_DURATION));
+        assert_eq!(PRESS_TRANSLATE, 1.0);
+    }
+
+    #[test]
+    fn control_styles_interpolate_colors_and_geometry() {
+        let from = Style {
+            background: Some(Background::Color(Color::TRANSPARENT)),
+            text_color: Color::BLACK,
+            border: Border {
+                color: Color::BLACK,
+                width: 0.0,
+                radius: 2.0.into(),
+            },
+            ..Style::default()
+        };
+        let to = Style {
+            background: Some(Background::Color(Color::WHITE)),
+            text_color: Color::WHITE,
+            border: Border {
+                color: Color::WHITE,
+                width: 2.0,
+                radius: 6.0.into(),
+            },
+            ..Style::default()
+        };
+
+        let middle = interpolate_style(from, to, 0.5);
+        let Some(Background::Color(background)) = middle.background else {
+            panic!("solid control backgrounds remain solid while interpolating");
+        };
+
+        assert!(background.r > 0.0 && background.r < 1.0);
+        assert_eq!(background.a, 0.5);
+        assert!(middle.text_color.r > 0.0 && middle.text_color.r < 1.0);
+        assert_eq!(middle.text_color.a, 1.0);
+        assert_eq!(middle.border.width, 1.0);
+        assert_eq!(middle.border.radius, 4.0.into());
     }
 }

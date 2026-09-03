@@ -14,6 +14,68 @@ pub struct Border {
     pub radius: Radius,
 }
 
+/// A single edge of a box border.
+///
+/// Unlike [`Border`], which describes one uniform outline, a `Side` can be
+/// used by widgets that need CSS-like dividers without drawing a second box.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Side {
+    /// The color of the edge.
+    pub color: Color,
+
+    /// The width of the edge.
+    pub width: f32,
+}
+
+/// Independent border edges for a box.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Sides {
+    /// The top edge.
+    pub top: Side,
+    /// The right edge.
+    pub right: Side,
+    /// The bottom edge.
+    pub bottom: Side,
+    /// The left edge.
+    pub left: Side,
+}
+
+/// Creates a box-border [`Side`].
+pub fn side(color: Color, width: impl Into<Pixels>) -> Side {
+    Side {
+        color,
+        width: width.into().0,
+    }
+}
+
+impl Sides {
+    /// Sets the top edge.
+    pub fn top(self, side: Side) -> Self {
+        Self { top: side, ..self }
+    }
+
+    /// Sets the right edge.
+    pub fn right(self, side: Side) -> Self {
+        Self {
+            right: side,
+            ..self
+        }
+    }
+
+    /// Sets the bottom edge.
+    pub fn bottom(self, side: Side) -> Self {
+        Self {
+            bottom: side,
+            ..self
+        }
+    }
+
+    /// Sets the left edge.
+    pub fn left(self, side: Side) -> Self {
+        Self { left: side, ..self }
+    }
+}
+
 /// Creates a new [`Border`] with the given [`Radius`].
 ///
 /// ```

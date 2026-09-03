@@ -409,6 +409,62 @@ where
                 .unwrap_or(Background::Color(Color::TRANSPARENT)),
         );
     }
+
+    let draw_side = |renderer: &mut Renderer, bounds: Rectangle, side: border::Side| {
+        if side.width <= 0.0 || side.color.a <= 0.0 {
+            return;
+        }
+
+        renderer.fill_quad(
+            renderer::Quad {
+                bounds,
+                snap: style.snap,
+                ..renderer::Quad::default()
+            },
+            side.color,
+        );
+    };
+
+    draw_side(
+        renderer,
+        Rectangle {
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: style.border_sides.top.width,
+        },
+        style.border_sides.top,
+    );
+    draw_side(
+        renderer,
+        Rectangle {
+            x: bounds.x + bounds.width - style.border_sides.right.width,
+            y: bounds.y,
+            width: style.border_sides.right.width,
+            height: bounds.height,
+        },
+        style.border_sides.right,
+    );
+    draw_side(
+        renderer,
+        Rectangle {
+            x: bounds.x,
+            y: bounds.y + bounds.height - style.border_sides.bottom.width,
+            width: bounds.width,
+            height: style.border_sides.bottom.width,
+        },
+        style.border_sides.bottom,
+    );
+    draw_side(
+        renderer,
+        Rectangle {
+            x: bounds.x,
+            y: bounds.y,
+            width: style.border_sides.left.width,
+            height: bounds.height,
+        },
+        style.border_sides.left,
+    );
 }
 
 /// The appearance of a container.
@@ -420,6 +476,12 @@ pub struct Style {
     pub background: Option<Background>,
     /// The [`Border`] of the container.
     pub border: Border,
+    /// Independent box edges, drawn inside the bounds after the background.
+    ///
+    /// Use these for separators shared by adjacent surfaces. A single top
+    /// edge, for example, avoids nesting a complete square border inside a
+    /// rounded parent.
+    pub border_sides: border::Sides,
     /// The [`Shadow`] of the container.
     pub shadow: Shadow,
     /// Whether the container should be snapped to the pixel grid.
@@ -432,6 +494,7 @@ impl Default for Style {
             text_color: None,
             background: None,
             border: Border::default(),
+            border_sides: border::Sides::default(),
             shadow: Shadow::default(),
             snap: renderer::CRISP,
         }
@@ -451,6 +514,14 @@ impl Style {
     pub fn border(self, border: impl Into<Border>) -> Self {
         Self {
             border: border.into(),
+            ..self
+        }
+    }
+
+    /// Updates the independent box edges of the [`Style`].
+    pub fn border_sides(self, border_sides: border::Sides) -> Self {
+        Self {
+            border_sides,
             ..self
         }
     }
@@ -610,5 +681,22 @@ fn style(pair: theme::palette::Pair) -> Style {
         text_color: Some(pair.text),
         border: border::rounded(2),
         ..Style::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_container_can_own_one_shared_edge_without_a_second_box() {
+        let edge = border::side(Color::WHITE, 1.0);
+        let style = Style::default().border_sides(border::Sides::default().top(edge));
+
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.border_sides.top, edge);
+        assert_eq!(style.border_sides.right.width, 0.0);
+        assert_eq!(style.border_sides.bottom.width, 0.0);
+        assert_eq!(style.border_sides.left.width, 0.0);
     }
 }
