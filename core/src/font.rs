@@ -1,6 +1,55 @@
 //! Load and use fonts.
 use std::hash::Hash;
 
+/// Extra space between glyphs, as a fraction of the type size.
+///
+/// Tracking is expressed relative to the size rather than in pixels, so a
+/// heading and a caption asking for the same tracking stay proportionate to
+/// one another. A design that says `0.06em` means [`Tracking(0.06)`].
+///
+/// [`Tracking(0.06)`]: Tracking
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Tracking(pub f32);
+
+impl Tracking {
+    /// No extra space. Glyphs sit at their natural advance.
+    pub const NONE: Self = Self(0.0);
+
+    /// Whether this tracking would change anything.
+    pub fn is_none(self) -> bool {
+        self.0 == 0.0
+    }
+}
+
+// `Font` is a hash key throughout the text pipeline, so tracking has to be
+// comparable and hashable by value. Compare and hash the bits, canonicalizing
+// the two values that would otherwise break the `Eq`/`Hash` agreement: NaN is
+// never equal to itself, and `-0.0 == 0.0` while their bits differ.
+impl PartialEq for Tracking {
+    fn eq(&self, other: &Self) -> bool {
+        if self.0.is_nan() {
+            other.0.is_nan()
+        } else {
+            self.0 == other.0
+        }
+    }
+}
+
+impl Eq for Tracking {}
+
+impl std::hash::Hash for Tracking {
+    fn hash<H: std::hash::Hasher>(&self, hasher: &mut H) {
+        const CANONICAL_NAN: u32 = 0x7fc0_0000;
+
+        let bits = if self.0.is_nan() {
+            CANONICAL_NAN
+        } else {
+            (self.0 + 0.0).to_bits()
+        };
+        bits.hash(hasher);
+    }
+}
+
 /// A font.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Font {
@@ -12,6 +61,8 @@ pub struct Font {
     pub stretch: Stretch,
     /// The [`Style`] of the [`Font`].
     pub style: Style,
+    /// The [`Tracking`] of the [`Font`].
+    pub tracking: Tracking,
 }
 
 impl Font {
@@ -21,6 +72,7 @@ impl Font {
         weight: Weight::Normal,
         stretch: Stretch::Normal,
         style: Style::Normal,
+        tracking: Tracking::NONE,
     };
 
     /// A monospaced font with normal [`Weight`].
@@ -53,6 +105,11 @@ impl Font {
     /// Sets the [`Stretch`] of the [`Font`].
     pub const fn stretch(self, stretch: Stretch) -> Self {
         Self { stretch, ..self }
+    }
+
+    /// Sets the [`Tracking`] of the [`Font`].
+    pub const fn tracking(self, tracking: Tracking) -> Self {
+        Self { tracking, ..self }
     }
 
     /// Sets the [`Style`] of the [`Font`].
@@ -198,3 +255,63 @@ pub enum Style {
 /// A font error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    fn hash(font: Font) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        font.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn a_font_defaults_to_the_face_s_own_tracking() {
+        assert!(Font::DEFAULT.tracking.is_none());
+        assert!(Font::MONOSPACE.tracking.is_none());
+        assert!(Font::new("Archivo").tracking.is_none());
+    }
+
+    #[test]
+    fn tracking_takes_part_in_equality_and_hashing() {
+        let plain = Font::new("JetBrains Mono");
+        let tracked = plain.tracking(Tracking(0.06));
+
+        assert_ne!(plain, tracked);
+        assert_ne!(hash(plain), hash(tracked));
+        assert_eq!(
+            tracked,
+            Font::new("JetBrains Mono").tracking(Tracking(0.06))
+        );
+        assert_eq!(
+            hash(tracked),
+            hash(Font::new("JetBrains Mono").tracking(Tracking(0.06)))
+        );
+    }
+
+    #[test]
+    fn equality_and_hashing_agree_on_the_awkward_values() {
+        // A hash key must never claim two values are equal while hashing them
+        // differently. Negative zero and NaN are the two that would.
+        let zero = Font::DEFAULT.tracking(Tracking(0.0));
+        let negative_zero = Font::DEFAULT.tracking(Tracking(-0.0));
+        assert_eq!(zero, negative_zero);
+        assert_eq!(hash(zero), hash(negative_zero));
+
+        let nan = Font::DEFAULT.tracking(Tracking(f32::NAN));
+        let other_nan = Font::DEFAULT.tracking(Tracking(-f32::NAN));
+        assert_eq!(nan, other_nan);
+        assert_eq!(hash(nan), hash(other_nan));
+    }
+
+    #[test]
+    fn only_a_real_tracking_counts_as_set() {
+        assert!(Tracking::NONE.is_none());
+        assert!(Tracking(0.0).is_none());
+        assert!(Tracking(-0.0).is_none());
+        assert!(!Tracking(0.06).is_none());
+    }
+}
