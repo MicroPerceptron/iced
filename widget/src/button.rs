@@ -412,7 +412,7 @@ where
             0.0
         };
 
-        renderer.with_translation(Vector::new(press_offset, press_offset), |renderer| {
+        let draw_button = |renderer: &mut Renderer| {
             draw(
                 renderer,
                 &style,
@@ -433,7 +433,13 @@ where
                     );
                 },
             );
-        });
+        };
+
+        if press_offset > 0.0 {
+            renderer.with_translation(Vector::new(press_offset, press_offset), draw_button);
+        } else {
+            draw_button(renderer);
+        }
     }
 
     fn mouse_interaction(

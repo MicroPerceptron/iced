@@ -425,22 +425,27 @@ where
         );
     };
 
+    let top = style.border_sides.top.width.min(bounds.height);
+    let right = style.border_sides.right.width.min(bounds.width);
+    let bottom = style.border_sides.bottom.width.min(bounds.height);
+    let left = style.border_sides.left.width.min(bounds.width);
+
     draw_side(
         renderer,
         Rectangle {
             x: bounds.x,
             y: bounds.y,
             width: bounds.width,
-            height: style.border_sides.top.width,
+            height: top,
         },
         style.border_sides.top,
     );
     draw_side(
         renderer,
         Rectangle {
-            x: bounds.x + bounds.width - style.border_sides.right.width,
+            x: bounds.x + bounds.width - right,
             y: bounds.y,
-            width: style.border_sides.right.width,
+            width: right,
             height: bounds.height,
         },
         style.border_sides.right,
@@ -449,9 +454,9 @@ where
         renderer,
         Rectangle {
             x: bounds.x,
-            y: bounds.y + bounds.height - style.border_sides.bottom.width,
+            y: bounds.y + bounds.height - bottom,
             width: bounds.width,
-            height: style.border_sides.bottom.width,
+            height: bottom,
         },
         style.border_sides.bottom,
     );
@@ -460,7 +465,7 @@ where
         Rectangle {
             x: bounds.x,
             y: bounds.y,
-            width: style.border_sides.left.width,
+            width: left,
             height: bounds.height,
         },
         style.border_sides.left,
