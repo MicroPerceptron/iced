@@ -293,11 +293,20 @@ pub fn align(
 
 /// Returns the attributes of the given [`Font`].
 pub fn to_attributes(font: Font) -> cosmic_text::Attrs<'static> {
-    cosmic_text::Attrs::new()
+    let attributes = cosmic_text::Attrs::new()
         .family(to_family(font.family))
         .weight(to_weight(font.weight))
         .stretch(to_stretch(font.stretch))
-        .style(to_style(font.style))
+        .style(to_style(font.style));
+
+    // Cosmic Text also takes tracking in em, so it passes through unscaled.
+    // Left unset when it would change nothing, so a font that asks for no
+    // tracking keeps whatever the face itself specifies.
+    if font.tracking.is_none() {
+        attributes
+    } else {
+        attributes.letter_spacing(font.tracking.0)
+    }
 }
 
 fn to_family(family: font::Family) -> cosmic_text::Family<'static> {
